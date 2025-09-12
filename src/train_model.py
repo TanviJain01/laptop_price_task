@@ -2,43 +2,43 @@ import numpy as np
 import pandas as pd
 import pickle
 import os
-from data_preprocessing import data   
+from data_preprocessing import data   # assumes `data` is your preprocessed DataFrame
 
-def factorize_dataframe(X):
-    
-    X_enc = X.copy()
-    for col in X_enc.select_dtypes(include='object').columns:
-        X_enc[col], _ = pd.factorize(X_enc[col])
-    return X_enc
 
-def standardize_features(X):
-    
-    X_mean = X.mean(axis=0)
-    X_std = X.std(axis=0).replace(0, 1)
-    X_scaled = (X - X_mean) / X_std
-    return X_scaled.values.astype(float), X_mean.values, X_std.values
+# ---------- Utilities ----------
+def factorize_dataframe(df):
+    df_enc = df.copy()
+    for col in df_enc.select_dtypes(include="object").columns:
+        df_enc[col], _ = pd.factorize(df_enc[col])
+    return df_enc
+
+def standardize_features(df):
+    mu = df.mean(axis=0)
+    sigma = df.std(axis=0).replace(0, 1)
+    X_scaled = (df - mu) / sigma
+    return X_scaled.values.astype(float), mu.values, sigma.values
 
 def regression_metrics(y_true, y_pred):
-    
-    mse = np.mean((y_true - y_pred) ** 2)
+    mse = np.mean((y_true - y_pred)**2)
     rmse = np.sqrt(mse)
-    r2 = 1 - np.sum((y_true - y_pred) ** 2) / np.sum((y_true - np.mean(y_true)) ** 2)
+    r2 = 1 - np.sum((y_true - y_pred)**2) / np.sum((y_true - np.mean(y_true))**2)
     return mse, rmse, r2
 
 
+# ---------- Models ----------
 class LinearRegressionGD:
-    def __init__(self, lr=0.01, epochs=50000):
+    def __init__(self, lr=0.01, epochs=5000):
         self.lr = lr
         self.epochs = epochs
         self.theta = None
 
     def fit(self, X, y):
         X_b = np.c_[np.ones((X.shape[0], 1)), X]
-        self.theta = np.zeros(X_b.shape[1])
+        self.theta = np.zeros((X_b.shape[1], 1))
         m = X_b.shape[0]
         for _ in range(self.epochs):
             y_pred = X_b @ self.theta
-            grad = 2 / m * X_b.T @ (y_pred - y)
+            grad = (2/m) * X_b.T @ (y_pred - y)
             self.theta -= self.lr * grad
         return self
 
@@ -56,8 +56,8 @@ class RidgeRegression:
         X_b = np.c_[np.ones((X.shape[0], 1)), X]
         n = X_b.shape[1]
         I = np.eye(n)
-        I[0, 0] = 0
-        self.theta = np.linalg.pinv(X_b.T @ X_b + self.lam * I) @ X_b.T @ y
+        I[0, 0] = 0  # no penalty for intercept
+        self.theta = np.linalg.pinv(X_b.T @ X_b + self.lam * I) @ (X_b.T @ y)
         return self
 
     def predict(self, X):
@@ -75,11 +75,11 @@ class LassoRegression:
     def fit(self, X, y):
         X_b = np.c_[np.ones((X.shape[0], 1)), X]
         m, n = X_b.shape
-        self.theta = np.zeros(n)
+        self.theta = np.zeros((n, 1))
         for _ in range(self.epochs):
             y_pred = X_b @ self.theta
-            grad = (2 / m) * X_b.T @ (y_pred - y) + self.lam * np.sign(self.theta)
-            grad[0] -= self.lam * np.sign(self.theta[0])  # don’t regularize bias
+            grad = (2/m) * X_b.T @ (y_pred - y) + self.lam * np.sign(self.theta)
+            grad[0] -= self.lam * np.sign(self.theta[0])  # no penalty on intercept
             self.theta -= self.lr * grad
         return self
 
@@ -119,23 +119,19 @@ class DecisionTree:
         n_samples, n_feats = X.shape
         if (depth >= self.max_depth) or (n_samples < self.min_samples_split):
             return {"value": y.mean()}
-
         feat_idxs = np.random.choice(n_feats, self.n_features, replace=False)
         best = {"mse": float("inf")}
         for feat_idx in feat_idxs:
             split_idx, split_thr, mse = self._best_split(X, y, feat_idx)
             if split_idx is not None and mse < best["mse"]:
                 best = {"mse": mse, "feature": split_idx, "threshold": split_thr}
-
         if best["mse"] == float("inf"):
             return {"value": y.mean()}
-
         left_mask = X[:, best["feature"]] <= best["threshold"]
         right_mask = ~left_mask
-        left_child = self._grow_tree(X[left_mask], y[left_mask], depth + 1)
-        right_child = self._grow_tree(X[right_mask], y[right_mask], depth + 1)
-        return {"feature": best["feature"], "threshold": best["threshold"],
-                "left": left_child, "right": right_child}
+        left_child = self._grow_tree(X[left_mask], y[left_mask], depth+1)
+        right_child = self._grow_tree(X[right_mask], y[right_mask], depth+1)
+        return {"feature": best["feature"], "threshold": best["threshold"], "left": left_child, "right": right_child}
 
     def _predict_sample(self, inputs, tree):
         if "value" in tree:
@@ -172,52 +168,54 @@ class RandomForest:
 
     def predict(self, X):
         preds = np.array([tree.predict(X) for tree in self.trees])
-        return np.mean(preds, axis=0)
+        return np.mean(preds, axis=0).reshape(-1, 1)
 
 
-def train_models(data):
-    X = data.drop(columns=['Price'])
-    y_linear = data['Price'].values.astype(float)        
-    y_log = np.log(data['Price'].values.astype(float))  
+# ---------- Training ----------
+def train_models():
+    X = data.drop(columns=["Price"])
+    y_raw = data["Price"].values.reshape(-1, 1)
+    y_log = np.log(y_raw)
 
-    # Preprocess features
+    # Preprocessing
     X_enc = factorize_dataframe(X)
-    X_scaled, X_mean, X_std = standardize_features(X_enc)
+    X_scaled, mu, sigma = standardize_features(X_enc)
 
-    # Define models
     models = [
-        ("Regression_Model_1", LinearRegressionGD(lr=0.01, epochs=20000), X_scaled, y_linear),
-        ("Regression_Model_2", RidgeRegression(lam=10), X_scaled, y_linear),
-        ("Regression_Model_3", LassoRegression(lam=0.1, lr=0.001, epochs=5000), X_scaled, y_linear),
-        ("Regression_Model_Final", RandomForest(n_estimators=30, max_depth=12), X_enc.values, y_log),
+        ("regression_model1.pkl", LinearRegressionGD(lr=0.01, epochs=5000), y_raw),
+        ("regression_model2.pkl", RidgeRegression(lam=10), y_raw),
+        ("regression_model3.pkl", LassoRegression(lam=0.1, lr=0.001, epochs=5000), y_raw),
+        ("regression_model_final.pkl", RandomForest(n_estimators=30, max_depth=12), y_log),  # log target
     ]
 
     os.makedirs("models", exist_ok=True)
     os.makedirs("results", exist_ok=True)
 
-    for name, model, X_used, y_used in models:
-        model.fit(X_used, y_used)
-        y_pred = model.predict(X_used)
+    for name, model, target in models:
+        model.fit(X_scaled, target)
+        y_pred = model.predict(X_scaled)
+        mse, rmse, r2 = regression_metrics(target, y_pred)
 
-        mse, rmse, r2 = regression_metrics(y_used, y_pred)
-        print(f"{name} -> MSE: {mse:.2f}, RMSE: {rmse:.2f}, R²: {r2:.4f}")
+        print(f"{name[:-4]} -> MSE: {mse:.2f}, RMSE: {rmse:.2f}, R²: {r2:.4f}")
 
         # Save model
         model_data = {
             "model": model,
-            "X_mean": X_mean,
-            "X_std": X_std,
-            "features": X.columns.tolist()
+            "mu": mu,
+            "sigma": sigma,
+            "features": X.columns.tolist(),
+            "target_col": "Price",
+            "use_log": (name == "regression_model_final.pkl")
         }
-        with open(f"models/{name}.pkl", "wb") as f:
+        with open(f"models/{name}", "wb") as f:
             pickle.dump(model_data, f)
 
-        # Save metrics/predictions for RandomForest (final)
-        if name == "Regression_Model_Final":
+        # Save metrics/predictions for final model
+        if name == "regression_model_final.pkl":
             with open("results/train_metrics.txt", "w") as f:
                 f.write(f"MSE: {mse:.2f}\nRMSE: {rmse:.2f}\nR²: {r2:.4f}\n")
             pd.DataFrame(y_pred).to_csv("results/train_predictions.csv", index=False, header=False)
 
 
 if __name__ == "__main__":
-    train_models(data)
+    train_models()
