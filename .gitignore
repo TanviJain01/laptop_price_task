@@ -1,0 +1,17 @@
+# Don’t commit raw data
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+.env/
+
+# Model files
+*.pkl
