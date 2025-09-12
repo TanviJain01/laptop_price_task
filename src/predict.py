@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pickle
 import argparse
+from train_model import RandomForest, DecisionTree, LinearRegressionGD, RidgeRegression, LassoRegression
 
 
 def regression_metrics(y_true, y_pred):
